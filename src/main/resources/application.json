@@ -1,0 +1,24 @@
+{
+    "env": "dev",
+    "postgres": {
+        "port": 5432,
+        "host" : ,
+        "database": ,
+        "user": ,
+        "password": ,
+        "trustAll": true,
+        "sslMode": "REQUIRE"
+    },
+    "aws": {
+        "region": "eu-west-1",
+        "secret": "",
+        "key": "",
+        "documentsBucket": "agapio-documents-dev",
+        "dryRun": false
+    },
+    "params": {
+        "clientId": ,
+        "depositStartDateIncl": "2019-01-01",
+        "depositEndDateExcl": "2023-03-01"
+    }
+}
