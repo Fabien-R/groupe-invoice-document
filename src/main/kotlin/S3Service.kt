@@ -6,9 +6,7 @@ import aws.sdk.kotlin.services.s3.model.CreateBucketConfiguration
 import aws.sdk.kotlin.services.s3.model.CreateBucketRequest
 import aws.smithy.kotlin.runtime.auth.awscredentials.Credentials
 import aws.smithy.kotlin.runtime.auth.awscredentials.CredentialsProvider
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.*
 import java.time.format.DateTimeFormatter
 import kotlin.math.round
 
@@ -30,6 +28,16 @@ private fun Invoice.toS3Key(
 class S3Service(private val _region: String, private val _key: String, private val _secret: String, private val _dryRyn: Boolean) {
 
     private suspend fun execute(command: suspend () -> Unit) = if (!_dryRyn) command() else delay(100)
+    private val dateFolderFormatter = DateTimeFormatter.ofPattern("yyyy-MM")
+    private val dateFileFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+    private fun copyInvoiceDocumentCommand(fromBucket: String, toBucket: String, invoice: Invoice): suspend () -> Unit = {
+        s3Client.copyS3Object(
+            fromBucket,
+            invoice.documentId.toString(),
+            toBucket,
+            invoice.toS3Key(dateFolderFormatter, dateFileFormatter),
+        )
+    }
 
     private val s3Client = S3Client {
         region = _region
@@ -73,6 +81,7 @@ class S3Service(private val _region: String, private val _key: String, private v
             })
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun copyInvoiceFileToClientBucket(fromBucket: String, invoices: List<Invoice>, envSuffix: String) {
         val firstInvoice = invoices.getOrNull(0)
         if (firstInvoice == null) {
@@ -81,36 +90,26 @@ class S3Service(private val _region: String, private val _key: String, private v
         }
         val size = invoices.size
         val toBucketName = "agapio-client-${firstInvoice.clientName.lowercase()}-$envSuffix"
+        val dispatcher = Dispatchers.IO.limitedParallelism(1)
         runBlocking {
-            val createBucket = launch {
+            val createBucket = launch(dispatcher)  {
                 s3Client.createBucket(toBucketName)
             }
             createBucket.join()
         }
 
-        val dateFolderFormatter = DateTimeFormatter.ofPattern("yyyy-MM")
-        val dateFileFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
-        invoices.forEachIndexed { index, invoice ->
-            runBlocking {
-                execute {
-                    val copyFile = launch {
-                        s3Client.copyS3Object(
-                            fromBucket,
-                            invoice.documentId.toString(),
-                            toBucketName,
-                            invoice.toS3Key(dateFolderFormatter, dateFileFormatter),
-                        )
 
-                    }
-                    copyFile.join() // sequential copy -- s3 has probably some constraint about the number of // command execution
+        runBlocking {
+            invoices.map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }.map {
+                launch(dispatcher) {
+                    execute { it.invoke() }
                 }
+            }.forEachIndexed { index, it ->
+                it.join()
                 if (index % 20 == 0)
                     println("${round(index.toFloat() * 10000 / size) / 100}%")
             }
-
         }
     }
-
-
 }
