@@ -105,7 +105,8 @@ class S3Service(private val _region: String, private val _key: String, private v
                     }
                     copyFile.join() // sequential copy -- s3 has probably some constraint about the number of // command execution
                 }
-                println("${round(index.toFloat() * 10000 / size) / 100}%")
+                if (index % 20 == 0)
+                    println("${round(index.toFloat() * 10000 / size) / 100}%")
             }
 
         }

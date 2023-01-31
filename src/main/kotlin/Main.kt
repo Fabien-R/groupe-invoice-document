@@ -14,6 +14,8 @@ import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeFormatter.ofPattern
 import java.util.*
 import kotlin.system.exitProcess
+import kotlin.time.ExperimentalTime
+import kotlin.time.measureTime
 
 
 const val DATE_FORMAT = "yyyy-MM-dd"
@@ -60,6 +62,7 @@ fun toOffsetDateTime(date: String): OffsetDateTime = OffsetDateTime.of(
 
 fun postgresOnlyKeepAlphaNumeric(s: String) = "lower(regexp_replace($s, '[^a-zA-Z0-9]+', '', 'g'))"
 
+@OptIn(ExperimentalTime::class)
 fun main() {
     val (env, postgres, aws, params) = ConfigLoader().loadConfigOrThrow<Env>("./src/main/resources/application.json")
 
@@ -127,12 +130,14 @@ fun main() {
             pgClient.close()
         }.onComplete { rows ->
             vertx.executeBlocking({ f ->
-                try {
-                    s3Service.copyInvoiceFileToClientBucket(aws.documentsBucket, rows.result().toList(), env)
-                } catch (e: Exception) {
-                    f.fail("Failed to copy: ${e.message}")
+                val duration = measureTime {
+                    try {
+                        s3Service.copyInvoiceFileToClientBucket(aws.documentsBucket, rows.result().toList(), env)
+                    } catch (e: Exception) {
+                        f.fail("Failed to copy: ${e.message}")
+                    }
                 }
-                f.complete("Succeeded to copy")
+                f.complete("Succeeded to copy in $duration")
             }, { res ->
                 println(res.cause()?.message ?: res.result())
                 exitProcess(0)
