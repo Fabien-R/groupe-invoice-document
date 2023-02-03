@@ -91,24 +91,19 @@ class S3Service(private val _region: String, private val _key: String, private v
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    fun copyInvoiceFileToClientBucket(fromBucket: String, invoices: List<Invoice>, envSuffix: String) {
+    suspend fun copyInvoiceFileToClientBucket(fromBucket: String, invoices: List<Invoice>, envSuffix: String) {
         val firstInvoice = invoices.getOrNull(0)
         if (firstInvoice == null) {
             println("No invoices")
             return
         }
+        val toBucketName = "agapio-client-${firstInvoice.clientName.lowercase()}-$envSuffix"
+        s3Client.createBucket(toBucketName)
+
+        val size = invoices.size
 
         val concurrency = 7
         val dispatcher = Dispatchers.Default.limitedParallelism(concurrency)
-        val toBucketName = "agapio-client-${firstInvoice.clientName.lowercase()}-$envSuffix"
-        runBlocking {
-            val createBucket = launch(dispatcher)  {
-                s3Client.createBucket(toBucketName)
-            }
-            createBucket.join()
-        }
-
-        val size = invoices.size
         copyInvoices3(invoices, fromBucket, toBucketName, dispatcher, size, concurrency)
 //      copyInvoices2(invoices, fromBucket, toBucketName, dispatcher, size)
 //      copyInvoiceBase(invoices, fromBucket, toBucketName, dispatcher, size)

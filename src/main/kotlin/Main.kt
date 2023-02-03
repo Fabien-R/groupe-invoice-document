@@ -1,11 +1,12 @@
 import com.sksamuel.hoplite.ConfigLoader
-import io.vertx.core.Vertx
+import io.vertx.kotlin.coroutines.await
 import io.vertx.pgclient.PgConnectOptions
 import io.vertx.pgclient.PgPool
 import io.vertx.pgclient.SslMode
 import io.vertx.sqlclient.PoolOptions
 import io.vertx.sqlclient.SqlClient
 import io.vertx.sqlclient.Tuple
+import kotlinx.coroutines.runBlocking
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -71,7 +72,6 @@ fun main() {
     require(params.depositEndDateExcl.isNotBlank()) { "depositEndDateExcl should be provided in the configuration $DATE_FORMAT" }
 
 
-    val vertx = Vertx.vertx()
     val s3Service = S3Service(aws.region, aws.key, aws.secret, aws.dryRun)
 
     try {
@@ -83,14 +83,14 @@ fun main() {
 
     val pgClient = createPgClient(postgres)
 
-
-    pgClient.preparedQuery(
-        """
+    runBlocking {
+        val invoices = pgClient.preparedQuery(
+            """
         select ${postgresOnlyKeepAlphaNumeric("c.name")} as client_name, ${postgresOnlyKeepAlphaNumeric("r.name")} as restaurant_name, r.id as restaurant_id, date, ${
-            postgresOnlyKeepAlphaNumeric(
-                "s.name"
-            )
-        } as supplier_name, reference, invoices.document_id, coalesce(round(invoices.total_price_ttc::decimal/10000, 2), 0.0) as total_incl, initial_deposits.original_filename
+                postgresOnlyKeepAlphaNumeric(
+                    "s.name"
+                )
+            } as supplier_name, reference, invoices.document_id, coalesce(round(invoices.total_price_ttc::decimal/10000, 2), 0.0) as total_incl, initial_deposits.original_filename
         from invoices
         left join documents initial_deposits on invoices.original_deposit_id = initial_deposits.id
         left join restaurants r on invoices.restaurant_id = r.id
@@ -103,44 +103,45 @@ fun main() {
         order by c.name, r.name, s.name, date, reference, invoices.id
 
     """.trimIndent()
-    )
-        .mapping { row ->
-            Invoice(
-                row.getString("client_name"),
-                row.getString("restaurant_name"),
-                row.getLocalDate("date"),
-                row.getString("supplier_name"),
-                row.getString("reference") ?: "",
-                row.getUUID("document_id"),
-                row.getFloat("total_incl"),
-                row.getString("original_filename")
+        )
+            .mapping { row ->
+                Invoice(
+                    row.getString("client_name"),
+                    row.getString("restaurant_name"),
+                    row.getLocalDate("date"),
+                    row.getString("supplier_name"),
+                    row.getString("reference") ?: "",
+                    row.getUUID("document_id"),
+                    row.getFloat("total_incl"),
+                    row.getString("original_filename")
+                )
+            }
+            .execute(
+                Tuple.of(
+                    toOffsetDateTime(params.depositStartDateIncl),
+                    toOffsetDateTime(params.depositEndDateExcl),
+                    params.clientId,
+                )
             )
+            .onFailure {
+                pgClient.close()
+                println("error while retrieving invoices: ${it.message}")
+            }.onSuccess {
+                println("Retrieve ${it.rowCount()} invoices successfully")
+                pgClient.close()
+            }
+            .map { rs ->
+                rs.toList()
+            }
+            .await()
+
+        val duration = measureTime {
+            try {
+                s3Service.copyInvoiceFileToClientBucket(aws.documentsBucket, invoices, env)
+            } catch (e: Exception) {
+                println("Failed to copy: ${e.message}")
+            }
         }
-        .execute(
-            Tuple.of(
-                toOffsetDateTime(params.depositStartDateIncl),
-                toOffsetDateTime(params.depositEndDateExcl),
-                params.clientId,
-            )
-        ).onFailure {
-            pgClient.close()
-            println("error while retrieving invoices: ${it.message}")
-        }.onSuccess {
-            println("Retrieve ${it.rowCount()} invoices successfully")
-            pgClient.close()
-        }.onComplete { rows ->
-            vertx.executeBlocking({ f ->
-                val duration = measureTime {
-                    try {
-                        s3Service.copyInvoiceFileToClientBucket(aws.documentsBucket, rows.result().toList(), env)
-                    } catch (e: Exception) {
-                        f.fail("Failed to copy: ${e.message}")
-                    }
-                }
-                f.complete("Succeeded to copy in $duration")
-            }, { res ->
-                println(res.cause()?.message ?: res.result())
-                exitProcess(0)
-            })
-        }
+        println("Succeeded to copy in $duration")
+    }
 }

@@ -32,6 +32,4 @@ The utility will display in the console
 3. and finally a success or error message `Succeeded to copy`
 
 ## Limitations
-1. The postgres client we used is based on vertx; it's java library and so don't use Kotlin way of doing things. So I have mixed two ways of handling blocking code.
-2. /!\ Because of this mix **_if the code is running more than 1 minute, you will see in the console some error-messages_** indicating that the `worker_thread has been blocked`. These errors do not prevent the utilities to do the work but mean it has not been correctly implemented in vertx.
-3. etc.
+1. Using sequential flow or parallel copy processing take the same amount of time --> something wrong in our implementation or a limitation/constraint in the kotlin aws sdk s3-client?
