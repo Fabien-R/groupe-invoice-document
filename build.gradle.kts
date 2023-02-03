@@ -16,7 +16,7 @@ dependencies {
     testImplementation(kotlin("test"))
     implementation("io.vertx:vertx-pg-client:4.3.7")
     implementation("io.vertx:vertx-core:4.3.7")
-    implementation("aws.sdk.kotlin:s3:0.+")
+    implementation("aws.sdk.kotlin:s3:0.19.5-beta")
     implementation("com.sksamuel.hoplite:hoplite-core:2.7.0")
     implementation("com.sksamuel.hoplite:hoplite-json:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4")
