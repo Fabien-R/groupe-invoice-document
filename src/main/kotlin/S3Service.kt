@@ -7,6 +7,8 @@ import aws.sdk.kotlin.services.s3.model.CreateBucketRequest
 import aws.smithy.kotlin.runtime.auth.awscredentials.Credentials
 import aws.smithy.kotlin.runtime.auth.awscredentials.CredentialsProvider
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import java.lang.Integer.max
 import java.time.format.DateTimeFormatter
 import kotlin.math.round
 
@@ -23,6 +25,13 @@ private fun Invoice.toS3Key(
     "${this.restaurantName}/${this.date?.format(dateFolderFormatter) ?: "empty"}/${this.date?.format(dateFileFormatter) ?: ""} - ${this.supplierName} - ${this.documentId.hashCode()} - EUR - ${
         this.totalPriceIncl.toString().replace(".", "_")
     }.${this.originalFileName.substringAfterLast(".", "unknown")}"
+
+@OptIn(FlowPreview::class)
+private fun <T, R> Flow<T>.concurrentMap(dispatcher: CoroutineDispatcher, concurrencyLevel: Int, transform: suspend (T) -> R): Flow<R> {
+    return flatMapMerge(concurrencyLevel) { value ->
+        flow { emit(transform(value)) }
+    }.flowOn(dispatcher)
+}
 
 
 class S3Service(private val _region: String, private val _key: String, private val _secret: String, private val _dryRyn: Boolean) {
@@ -88,9 +97,10 @@ class S3Service(private val _region: String, private val _key: String, private v
             println("No invoices")
             return
         }
-        val size = invoices.size
+
+        val concurrency = 7
+        val dispatcher = Dispatchers.Default.limitedParallelism(concurrency)
         val toBucketName = "agapio-client-${firstInvoice.clientName.lowercase()}-$envSuffix"
-        val dispatcher = Dispatchers.IO.limitedParallelism(1)
         runBlocking {
             val createBucket = launch(dispatcher)  {
                 s3Client.createBucket(toBucketName)
@@ -98,11 +108,69 @@ class S3Service(private val _region: String, private val _key: String, private v
             createBucket.join()
         }
 
+        val size = invoices.size
+        copyInvoices3(invoices, fromBucket, toBucketName, dispatcher, size, concurrency)
+//      copyInvoices2(invoices, fromBucket, toBucketName, dispatcher, size)
+//      copyInvoiceBase(invoices, fromBucket, toBucketName, dispatcher, size)
+
+    }
+
+    @OptIn(FlowPreview::class)
+    private suspend fun copyInvoices3(
+        invoices: List<Invoice>,
+        fromBucket: String,
+        toBucketName: String,
+        dispatcher: CoroutineDispatcher,
+        size: Int,
+        concurrency: Int,
+    ) {
+        val chunkSize = max(round(size / concurrency.toFloat()).toInt(), 1)
+        println("chunksize: $chunkSize")
+        invoices
+            .map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }
+            .chunked(chunkSize).asFlow()
+            .onStart { println("Start copy") }
+            .flatMapMerge(concurrency) { copyCommands ->
+                copyCommands.asFlow().onEach { execute(it) }
+            }
+            .flowOn(dispatcher)
+            .scan(0) { acc, _ -> acc + 1 }
+            .onCompletion { println("Copy done ") }
+            .filter { it % 100 == 0 }
+            .collect {
+                println("${round(it.toFloat() * 10000 / size) / 100}%")
+            }
+    }
+
+    private suspend fun copyInvoices2(
+        invoices: List<Invoice>,
+        fromBucket: String,
+        toBucketName: String,
+        dispatcher: CoroutineDispatcher,
+        size: Int,
+    ) =
+        invoices.asFlow()
+            .map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }
+            .concurrentMap(dispatcher, 400000) {
+                execute { it.invoke() }
+            }
+            .scan(0) { acc, _ -> acc + 1 }
+            .collect {
+                if (it % 20 == 0)
+                    println("${round(it.toFloat() * 10000 / size) / 100}%")
+            }
 
 
-        runBlocking {
+    private suspend fun copyInvoiceBase(
+        invoices: List<Invoice>,
+        fromBucket: String,
+        toBucketName: String,
+        dispatcher: CoroutineDispatcher,
+        size: Int
+    ) {
+        coroutineScope {
             invoices.map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }.map {
-                launch(dispatcher) {
+                this.launch(dispatcher) {
                     execute { it.invoke() }
                 }
             }.forEachIndexed { index, it ->
