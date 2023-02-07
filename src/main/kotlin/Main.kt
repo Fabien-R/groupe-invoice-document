@@ -60,8 +60,9 @@ fun toOffsetDateTime(date: String): OffsetDateTime = OffsetDateTime.of(
     ZoneOffset.UTC
 )
 
-
 fun postgresOnlyKeepAlphaNumeric(s: String) = "lower(regexp_replace($s, '[^a-zA-Z0-9]+', '', 'g'))"
+
+private fun toBucketName(invoice: Invoice, env: String): String = "agapio-client-${invoice.clientName.lowercase()}-$env"
 
 @OptIn(ExperimentalTime::class)
 fun main() {
@@ -84,13 +85,14 @@ fun main() {
     val pgClient = createPgClient(postgres)
 
     runBlocking {
-        val invoices = pgClient.preparedQuery(
-            """
+        val duration = measureTime {
+            val invoices = pgClient.preparedQuery(
+                """
         select ${postgresOnlyKeepAlphaNumeric("c.name")} as client_name, ${postgresOnlyKeepAlphaNumeric("r.name")} as restaurant_name, r.id as restaurant_id, date, ${
-                postgresOnlyKeepAlphaNumeric(
-                    "s.name"
-                )
-            } as supplier_name, reference, invoices.document_id, coalesce(round(invoices.total_price_ttc::decimal/10000, 2), 0.0) as total_incl, initial_deposits.original_filename
+                    postgresOnlyKeepAlphaNumeric(
+                        "s.name"
+                    )
+                } as supplier_name, reference, invoices.document_id, coalesce(round(invoices.total_price_ttc::decimal/10000, 2), 0.0) as total_incl, initial_deposits.original_filename
         from invoices
         left join documents initial_deposits on invoices.original_deposit_id = initial_deposits.id
         left join restaurants r on invoices.restaurant_id = r.id
@@ -103,45 +105,51 @@ fun main() {
         order by c.name, r.name, s.name, date, reference, invoices.id
 
     """.trimIndent()
-        )
-            .mapping { row ->
-                Invoice(
-                    row.getString("client_name"),
-                    row.getString("restaurant_name"),
-                    row.getLocalDate("date"),
-                    row.getString("supplier_name"),
-                    row.getString("reference") ?: "",
-                    row.getUUID("document_id"),
-                    row.getFloat("total_incl"),
-                    row.getString("original_filename")
-                )
-            }
-            .execute(
-                Tuple.of(
-                    toOffsetDateTime(params.depositStartDateIncl),
-                    toOffsetDateTime(params.depositEndDateExcl),
-                    params.clientId,
-                )
             )
-            .onFailure {
-                pgClient.close()
-                println("error while retrieving invoices: ${it.message}")
-            }.onSuccess {
-                println("Retrieve ${it.rowCount()} invoices successfully")
-                pgClient.close()
-            }
-            .map { rs ->
-                rs.toList()
-            }
-            .await()
+                .mapping { row ->
+                    Invoice(
+                        row.getString("client_name"),
+                        row.getString("restaurant_name"),
+                        row.getLocalDate("date"),
+                        row.getString("supplier_name"),
+                        row.getString("reference") ?: "",
+                        row.getUUID("document_id"),
+                        row.getFloat("total_incl"),
+                        row.getString("original_filename")
+                    )
+                }
+                .execute(
+                    Tuple.of(
+                        toOffsetDateTime(params.depositStartDateIncl),
+                        toOffsetDateTime(params.depositEndDateExcl),
+                        params.clientId,
+                    )
+                )
+                .onFailure {
+                    pgClient.close()
+                    println("error while retrieving invoices: ${it.message}")
+                }.onSuccess {
+                    println("Retrieve ${it.rowCount()} invoices successfully")
+                    pgClient.close()
+                }
+                .map { rs ->
+                    rs.toList()
+                }
+                .await()
 
-        val duration = measureTime {
+            val firstInvoice = invoices.getOrNull(0)
+            if (firstInvoice == null) {
+                println("No invoices")
+                return@runBlocking
+            }
+            val toBucketName = toBucketName(firstInvoice, env)
+
             try {
-                s3Service.copyInvoiceFileToClientBucket(aws.documentsBucket, invoices, env)
+                s3Service.copyInvoiceFileToClientBucket(aws.documentsBucket, toBucketName, invoices)
             } catch (e: Exception) {
                 println("Failed to copy: ${e.message}")
             }
         }
-        println("Succeeded to copy in $duration")
+        println("Total duration: $duration")
     }
 }

@@ -6,6 +6,8 @@ import aws.smithy.kotlin.runtime.auth.awscredentials.CredentialsProvider
 import kotlinx.coroutines.*
 import java.time.format.DateTimeFormatter
 import kotlin.math.round
+import kotlin.time.ExperimentalTime
+import kotlin.time.measureTime
 
 class S3CredentialProviderLight(key: String, secret: String) : CredentialsProvider {
     private val credentials = Credentials(accessKeyId = key, secretAccessKey = secret)
@@ -81,23 +83,17 @@ class S3Service(private val _region: String, private val _key: String, private v
             })
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    suspend fun copyInvoiceFileToClientBucket(fromBucket: String, invoices: List<Invoice>, envSuffix: String) {
-        // TODO encapsulate display of copy
-        // In the main the total time
-        val firstInvoice = invoices.getOrNull(0)
-        if (firstInvoice == null) {
-            println("No invoices")
-            return
-        }
-        val toBucketName = "agapio-client-${firstInvoice.clientName.lowercase()}-$envSuffix"
-        s3Client.createBucket(toBucketName)
+    @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
+    suspend fun copyInvoiceFileToClientBucket(fromBucket: String, toBucket: String, invoices: List<Invoice>) {
+        s3Client.createBucket(toBucket)
 
         val size = invoices.size
-
         val concurrency = 1000
         val dispatcher = Dispatchers.Default.limitedParallelism(concurrency)
-        copyInvoiceBase(invoices, fromBucket, toBucketName, dispatcher, size)
+        val duration = measureTime {
+            copyInvoiceBase(invoices, fromBucket, toBucket, dispatcher, size)
+        }
+        println("Copy duration: $duration")
     }
 
 
