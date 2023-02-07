@@ -1,14 +1,9 @@
 import aws.sdk.kotlin.services.s3.S3Client
 import aws.sdk.kotlin.services.s3.headBucket
-import aws.sdk.kotlin.services.s3.model.BucketLocationConstraint
-import aws.sdk.kotlin.services.s3.model.CopyObjectRequest
-import aws.sdk.kotlin.services.s3.model.CreateBucketConfiguration
-import aws.sdk.kotlin.services.s3.model.CreateBucketRequest
+import aws.sdk.kotlin.services.s3.model.*
 import aws.smithy.kotlin.runtime.auth.awscredentials.Credentials
 import aws.smithy.kotlin.runtime.auth.awscredentials.CredentialsProvider
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
-import java.lang.Integer.max
 import java.time.format.DateTimeFormatter
 import kotlin.math.round
 
@@ -18,6 +13,8 @@ class S3CredentialProviderLight(key: String, secret: String) : CredentialsProvid
 
 }
 
+internal fun percentageRateWith2digits(number: Int, total: Int) = round(number.toFloat() * 10000 / total) / 100
+
 private fun Invoice.toS3Key(
     dateFolderFormatter: DateTimeFormatter?,
     dateFileFormatter: DateTimeFormatter?
@@ -26,20 +23,13 @@ private fun Invoice.toS3Key(
         this.totalPriceIncl.toString().replace(".", "_")
     }.${this.originalFileName.substringAfterLast(".", "unknown")}"
 
-@OptIn(FlowPreview::class)
-private fun <T, R> Flow<T>.concurrentMap(dispatcher: CoroutineDispatcher, concurrencyLevel: Int, transform: suspend (T) -> R): Flow<R> {
-    return flatMapMerge(concurrencyLevel) { value ->
-        flow { emit(transform(value)) }
-    }.flowOn(dispatcher)
-}
-
 
 class S3Service(private val _region: String, private val _key: String, private val _secret: String, private val _dryRyn: Boolean) {
 
-    private suspend fun execute(command: suspend () -> Unit) = if (!_dryRyn) command() else delay(100)
+    internal suspend fun execute(command: suspend () -> Unit) = if (!_dryRyn) command() else delay(100)
     private val dateFolderFormatter = DateTimeFormatter.ofPattern("yyyy-MM")
     private val dateFileFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
-    private fun copyInvoiceDocumentCommand(fromBucket: String, toBucket: String, invoice: Invoice): suspend () -> Unit = {
+    internal fun copyInvoiceDocumentCommand(fromBucket: String, toBucket: String, invoice: Invoice): suspend () -> Unit = {
         s3Client.copyS3Object(
             fromBucket,
             invoice.documentId.toString(),
@@ -76,6 +66,7 @@ class S3Service(private val _region: String, private val _key: String, private v
                     createBucketConfiguration = CreateBucketConfiguration {
                         locationConstraint = BucketLocationConstraint.EuWest1
                     }
+                    acl = BucketCannedAcl.fromValue("private")
                 })
             }
         }
@@ -92,6 +83,8 @@ class S3Service(private val _region: String, private val _key: String, private v
 
     @OptIn(ExperimentalCoroutinesApi::class)
     suspend fun copyInvoiceFileToClientBucket(fromBucket: String, invoices: List<Invoice>, envSuffix: String) {
+        // TODO encapsulate display of copy
+        // In the main the total time
         val firstInvoice = invoices.getOrNull(0)
         if (firstInvoice == null) {
             println("No invoices")
@@ -102,58 +95,10 @@ class S3Service(private val _region: String, private val _key: String, private v
 
         val size = invoices.size
 
-        val concurrency = 7
+        val concurrency = 1000
         val dispatcher = Dispatchers.Default.limitedParallelism(concurrency)
-        copyInvoices3(invoices, fromBucket, toBucketName, dispatcher, size, concurrency)
-//      copyInvoices2(invoices, fromBucket, toBucketName, dispatcher, size)
-//      copyInvoiceBase(invoices, fromBucket, toBucketName, dispatcher, size)
-
+        copyInvoiceBase(invoices, fromBucket, toBucketName, dispatcher, size)
     }
-
-    @OptIn(FlowPreview::class)
-    private suspend fun copyInvoices3(
-        invoices: List<Invoice>,
-        fromBucket: String,
-        toBucketName: String,
-        dispatcher: CoroutineDispatcher,
-        size: Int,
-        concurrency: Int,
-    ) {
-        val chunkSize = max(round(size / concurrency.toFloat()).toInt(), 1)
-        println("chunksize: $chunkSize")
-        invoices
-            .map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }
-            .chunked(chunkSize).asFlow()
-            .onStart { println("Start copy") }
-            .flatMapMerge(concurrency) { copyCommands ->
-                copyCommands.asFlow().onEach { execute(it) }
-            }
-            .flowOn(dispatcher)
-            .scan(0) { acc, _ -> acc + 1 }
-            .onCompletion { println("Copy done ") }
-            .filter { it % 100 == 0 }
-            .collect {
-                println("${round(it.toFloat() * 10000 / size) / 100}%")
-            }
-    }
-
-    private suspend fun copyInvoices2(
-        invoices: List<Invoice>,
-        fromBucket: String,
-        toBucketName: String,
-        dispatcher: CoroutineDispatcher,
-        size: Int,
-    ) =
-        invoices.asFlow()
-            .map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }
-            .concurrentMap(dispatcher, 400000) {
-                execute { it.invoke() }
-            }
-            .scan(0) { acc, _ -> acc + 1 }
-            .collect {
-                if (it % 20 == 0)
-                    println("${round(it.toFloat() * 10000 / size) / 100}%")
-            }
 
 
     private suspend fun copyInvoiceBase(
@@ -170,8 +115,8 @@ class S3Service(private val _region: String, private val _key: String, private v
                 }
             }.forEachIndexed { index, it ->
                 it.join()
-                if (index % 20 == 0)
-                    println("${round(index.toFloat() * 10000 / size) / 100}%")
+                if (index % 100 == 0)
+                    println("${percentageRateWith2digits(index, size)}%")
             }
         }
     }
