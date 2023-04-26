@@ -1,4 +1,17 @@
-## Purposes
+## Recent Purposes
+
+This small utility was created when my ex-startup closed due to the 2023 economical downturn. 
+
+It was my first play with Kotlin. I will re-use it in order to test other kotlin persistence libraries. 
+
+Goals: 
+1. Pull out the sql queries from the code
+2. if any? (control concurrency, today open bar)
+
+---
+---
+
+## Old Purposes
 
 Utilities that copies the files of the client's complete invoices from the environment bucket to a `agapio-client-${formated-client-name}-${env}`
 
