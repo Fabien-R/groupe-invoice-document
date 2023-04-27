@@ -5,8 +5,10 @@ This small utility was created when my ex-startup closed due to the 2023 economi
 It was my first play with Kotlin. I will re-use it in order to test other kotlin persistence libraries. 
 
 Goals: 
-1. Pull out the sql queries from the code
+1. Pull out the sql queries from the code using [SQLDelight](https://cashapp.github.io/sqldelight)
 2. if any? (control concurrency, today open bar)
+3. ContextReceiver?
+4. Better/Generic error handling ([arrow](https://arrow-kt.io/)? ) 
 
 ---
 ---
