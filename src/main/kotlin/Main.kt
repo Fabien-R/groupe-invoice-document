@@ -1,11 +1,4 @@
 import com.sksamuel.hoplite.ConfigLoader
-import io.vertx.kotlin.coroutines.await
-import io.vertx.pgclient.PgConnectOptions
-import io.vertx.pgclient.PgPool
-import io.vertx.pgclient.SslMode
-import io.vertx.sqlclient.PoolOptions
-import io.vertx.sqlclient.SqlClient
-import io.vertx.sqlclient.Tuple
 import kotlinx.coroutines.runBlocking
 import java.time.LocalDate
 import java.time.OffsetDateTime
@@ -23,7 +16,7 @@ const val DATE_FORMAT = "yyyy-MM-dd"
 val PARAMS_DATE_FORMATTER: DateTimeFormatter = ofPattern(DATE_FORMAT)
 
 data class Env(val env: String, val postgres: Postgres, val aws: Aws, val params: Params)
-data class Postgres(val port: Int, val host: String, val database: String, val user: String, val password: String, val trustAll: Boolean, val sslMode: SslMode)
+data class Postgres(val port: Int, val host: String, val database: String, val user: String, val password: String, val trustAll: Boolean)
 data class Aws(val region: String, val secret: String, val key: String, val documentsBucket: String, val dryRun: Boolean)
 data class Params(val clientId: String, val depositStartDateIncl: String, val depositEndDateExcl: String)
 
@@ -34,25 +27,9 @@ data class Invoice(
     val supplierName: String,
     val reference: String,
     val documentId: UUID,
-    val totalPriceIncl: Float,
+    val totalPriceIncl: Double,
     val originalFileName: String,
 )
-
-fun createPgClient(postgres: Postgres): SqlClient {
-    val connectOptions: PgConnectOptions = PgConnectOptions()
-        .setPort(postgres.port)
-        .setHost(postgres.host)
-        .setDatabase(postgres.database)
-        .setUser(postgres.user)
-        .setPassword(postgres.password)
-        .setTrustAll(postgres.trustAll).setSslMode(postgres.sslMode)
-
-    // Pool options
-    val poolOptions: PoolOptions = PoolOptions().setMaxSize(5)
-
-// Create the pooled client
-    return PgPool.client(connectOptions, poolOptions)
-}
 
 // TODO Is the TZ correct ?
 fun toOffsetDateTime(date: String): OffsetDateTime = OffsetDateTime.of(
@@ -60,7 +37,7 @@ fun toOffsetDateTime(date: String): OffsetDateTime = OffsetDateTime.of(
     ZoneOffset.UTC
 )
 
-fun postgresOnlyKeepAlphaNumeric(s: String) = "lower(regexp_replace($s, '[^a-zA-Z0-9]+', '', 'g'))"
+fun String.onlyKeepAlphaNumeric() = this.lowercase().replace(Regex("[^a-zA-Z0-9]+"), "")
 
 private fun toBucketName(invoice: Invoice, env: String): String = "agapio-client-${invoice.clientName.lowercase()}-$env"
 
@@ -82,60 +59,28 @@ fun main() {
         exitProcess(1)
     }
 
-    val pgClient = createPgClient(postgres)
+    val hikari = hikari(postgres)
+    val database = database(hikari)
+
 
     runBlocking {
         val duration = measureTime {
-            val invoices = pgClient.preparedQuery(
-                """
-        select ${postgresOnlyKeepAlphaNumeric("c.name")} as client_name, ${postgresOnlyKeepAlphaNumeric("r.name")} as restaurant_name, r.id as restaurant_id, date, ${
-                    postgresOnlyKeepAlphaNumeric(
-                        "s.name"
-                    )
-                } as supplier_name, reference, invoices.document_id, coalesce(round(invoices.total_price_ttc::decimal/10000, 2), 0.0) as total_incl, initial_deposits.original_filename
-        from invoices
-        left join documents initial_deposits on invoices.original_deposit_id = initial_deposits.id
-        left join restaurants r on invoices.restaurant_id = r.id
-        left join clients c on r.client_id = c.id
-        left join suppliers s on invoices.supplier_id = s.id
-        where invoices.status = 'complete'
-          and initial_deposits.created_at >=$1
-          and initial_deposits.created_at <$2
-          and c.id=$3
-        order by c.name, r.name, s.name, date, reference, invoices.id
-
-    """.trimIndent()
-            )
-                .mapping { row ->
-                    Invoice(
-                        row.getString("client_name"),
-                        row.getString("restaurant_name"),
-                        row.getLocalDate("date"),
-                        row.getString("supplier_name"),
-                        row.getString("reference") ?: "",
-                        row.getUUID("document_id"),
-                        row.getFloat("total_incl"),
-                        row.getString("original_filename")
-                    )
-                }
-                .execute(
-                    Tuple.of(
-                        toOffsetDateTime(params.depositStartDateIncl),
-                        toOffsetDateTime(params.depositEndDateExcl),
-                        params.clientId,
-                    )
+            val invoices = database.invoicesQueries.selectAllInvoicesBetweenStartAndEndForClient(
+                toOffsetDateTime(params.depositStartDateIncl),
+                toOffsetDateTime(params.depositEndDateExcl),
+                UUID.fromString(params.clientId)
+            ) { client_name, restaurant_name, _, date, supplier_name, reference, document_id, total_inc, original_filename ->
+                Invoice(
+                    client_name!!.onlyKeepAlphaNumeric(),
+                    restaurant_name!!.onlyKeepAlphaNumeric(),
+                    date,
+                    supplier_name!!.onlyKeepAlphaNumeric(),
+                    reference!!,
+                    document_id,
+                    total_inc,
+                    original_filename!!
                 )
-                .onFailure {
-                    pgClient.close()
-                    println("error while retrieving invoices: ${it.message}")
-                }.onSuccess {
-                    println("Retrieve ${it.rowCount()} invoices successfully")
-                    pgClient.close()
-                }
-                .map { rs ->
-                    rs.toList()
-                }
-                .await()
+            }.executeAsList()
 
             val firstInvoice = invoices.getOrNull(0)
             if (firstInvoice == null) {

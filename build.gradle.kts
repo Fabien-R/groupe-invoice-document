@@ -2,6 +2,7 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
     kotlin("jvm") version "1.7.10"
+    id("app.cash.sqldelight") version "2.0.0-alpha05"
     application
 }
 
@@ -14,10 +15,9 @@ repositories {
 
 dependencies {
     testImplementation(kotlin("test"))
-    implementation("io.vertx:vertx-pg-client:4.3.7")
-    implementation("io.vertx:vertx-core:4.3.7")
-    implementation("io.vertx:vertx-lang-kotlin:4.3.7")
-    implementation("io.vertx:vertx-lang-kotlin-coroutines:4.3.7")
+    implementation("app.cash.sqldelight:jdbc-driver:2.0.0-alpha05")
+    implementation("com.zaxxer:HikariCP:5.0.1")
+    implementation("org.postgresql:postgresql:42.6.0")
     implementation("aws.sdk.kotlin:s3:0.19.5-beta")
     implementation("com.sksamuel.hoplite:hoplite-core:2.7.0")
     implementation("com.sksamuel.hoplite:hoplite-json:2.7.0")
@@ -34,4 +34,15 @@ tasks.withType<KotlinCompile>() {
 
 application {
     mainClass.set("MainKt")
+}
+
+sqldelight {
+    databases {
+        create("Database") {
+            packageName.set("com.github.fabien")
+            sourceFolders.set(listOf("sqldelight"))
+            dialect("app.cash.sqldelight:postgresql-dialect:2.0.0-alpha05")
+            deriveSchemaFromMigrations
+        }
+    }
 }

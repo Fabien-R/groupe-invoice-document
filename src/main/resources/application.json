@@ -6,8 +6,7 @@
         "database": ,
         "user": ,
         "password": ,
-        "trustAll": true,
-        "sslMode": "REQUIRE"
+        "trustAll": true
     },
     "aws": {
         "region": "eu-west-1",

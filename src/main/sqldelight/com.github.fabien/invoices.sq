@@ -1,0 +1,57 @@
+CREATE TABLE clients (
+    id         uuid       NOT NULL CONSTRAINT clients_pkey PRIMARY KEY,
+    name       varchar                                                   NOT NULL
+);
+
+CREATE TABLE restaurants (
+    id                  uuid   NOT NULL CONSTRAINT restaurants_pkey PRIMARY KEY,
+    name                varchar NOT NULL,
+    client_id           uuid  NOT NULL CONSTRAINT restaurants_client_id_fkey REFERENCES clients
+);
+
+
+CREATE TABLE documents (
+    id                  uuid NOT NULL CONSTRAINT documents_pkey PRIMARY KEY,
+    status              varchar NOT NULL,
+    restaurant_id       uuid  NOT NULL CONSTRAINT documents_restaurant_id_fkey REFERENCES restaurants,
+    original_filename   varchar NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL
+);
+
+CREATE TABLE suppliers (
+    id          uuid NOT NULL CONSTRAINT suppliers_pkey PRIMARY KEY,
+    name        varchar NOT NULL,
+    national_id varchar NOT NULL,
+    vat_number  varchar,
+    country     varchar(50) NOT NULL,
+    CONSTRAINT suppliers_country_national_id_key UNIQUE (country, national_id)
+);
+
+CREATE TABLE invoices (
+    id                          uuid NOT NULL CONSTRAINT invoices_pkey PRIMARY KEY,
+    reference                   varchar,
+    date                        DATE,
+    status                      varchar NOT NULL,
+    supplier_id                 uuid CONSTRAINT invoices_supplier_id_fkey REFERENCES suppliers,
+    comment                     text,
+    document_id                 uuid NOT NULL CONSTRAINT invoices_document_id_key UNIQUE CONSTRAINT invoices_document_id_fkey REFERENCES documents,
+    total_price_ttc             integer,
+    restaurant_id               uuid NOT NULL CONSTRAINT invoices_restaurant_id_fkey REFERENCES restaurants,
+    original_deposit_id         uuid NOT NULL CONSTRAINT invoices_original_deposit_id_fkey REFERENCES documents
+);
+
+selectAllInvoicesBetweenStartAndEndForClient:
+SELECT clients.name AS client_name, restaurants.name AS restaurant_name, restaurants.id AS restaurant_id, date, suppliers.name AS supplier_name, reference, invoices.document_id,
+-- shorthand cast notation not handled by sqldelight invoices.total_price_ttc::DECIMAL
+COALESCE(ROUND(CAST(invoices.total_price_ttc AS DECIMAL)/10000, 2), 0.0) AS total_incl,
+initial_deposits.original_filename
+FROM invoices
+LEFT JOIN documents initial_deposits ON invoices.original_deposit_id = initial_deposits.id
+LEFT JOIN restaurants ON invoices.restaurant_id = restaurants.id
+LEFT JOIN clients ON restaurants.client_id = clients.id
+LEFT JOIN suppliers ON invoices.supplier_id = suppliers.id
+WHERE invoices.status = 'complete'
+  AND initial_deposits.created_at >= :startDate
+  AND initial_deposits.created_at < :endDate
+  AND clients.id= :clientId
+ORDER BY clients.name, restaurants.name, suppliers.name, date, reference, invoices.id;
