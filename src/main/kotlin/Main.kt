@@ -1,4 +1,4 @@
-import com.sksamuel.hoplite.ConfigLoader
+import env.getConfiguration
 import kotlinx.coroutines.runBlocking
 import java.time.LocalDate
 import java.time.OffsetDateTime
@@ -14,11 +14,6 @@ import kotlin.time.measureTime
 
 const val DATE_FORMAT = "yyyy-MM-dd"
 val PARAMS_DATE_FORMATTER: DateTimeFormatter = ofPattern(DATE_FORMAT)
-
-data class Env(val env: String, val postgres: Postgres, val aws: Aws, val params: Params)
-data class Postgres(val port: Int, val host: String, val database: String, val user: String, val password: String, val trustAll: Boolean)
-data class Aws(val region: String, val secret: String, val key: String, val documentsBucket: String, val dryRun: Boolean)
-data class Params(val clientId: String, val depositStartDateIncl: String, val depositEndDateExcl: String)
 
 data class Invoice(
     val clientName: String,
@@ -43,7 +38,7 @@ private fun toBucketName(invoice: Invoice, env: String): String = "agapio-client
 
 @OptIn(ExperimentalTime::class)
 fun main() {
-    val (env, postgres, aws, params) = ConfigLoader().loadConfigOrThrow<Env>("./src/main/resources/application.json")
+    val (env, postgres, aws, params) = getConfiguration()
 
     require(params.clientId.isNotBlank()) { "clientId should be provided in the configuration" }
     require(params.depositStartDateIncl.isNotBlank()) { "depositStartDateIncl should be provided in the configuration with the format $DATE_FORMAT" }
