@@ -1,3 +1,4 @@
+import env.dependencies
 import env.getConfiguration
 import kotlinx.coroutines.runBlocking
 import java.time.LocalDate
@@ -32,60 +33,51 @@ fun toOffsetDateTime(date: String): OffsetDateTime = OffsetDateTime.of(
     ZoneOffset.UTC
 )
 
-fun String.onlyKeepAlphaNumeric() = this.lowercase().replace(Regex("[^a-zA-Z0-9]+"), "")
-
 private fun toBucketName(invoice: Invoice, env: String): String = "agapio-client-${invoice.clientName.lowercase()}-$env"
 
 @OptIn(ExperimentalTime::class)
 fun main() {
-    val (env, postgres, aws, params) = getConfiguration()
+    val env = getConfiguration()
 
-    require(params.clientId.isNotBlank()) { "clientId should be provided in the configuration" }
-    require(params.depositStartDateIncl.isNotBlank()) { "depositStartDateIncl should be provided in the configuration with the format $DATE_FORMAT" }
-    require(params.depositEndDateExcl.isNotBlank()) { "depositEndDateExcl should be provided in the configuration $DATE_FORMAT" }
+    val clientId = env.params.clientId
+    val startDate = env.params.depositStartDateIncl
+    val endDate = env.params.depositEndDateExcl
+    val documentBucket = env.aws.documentsBucket
+
+    require(clientId.isNotBlank()) { "clientId should be provided in the configuration" }
+    require(startDate.isNotBlank()) { "depositStartDateIncl should be provided in the configuration with the format $DATE_FORMAT" }
+    require(endDate.isNotBlank()) { "depositEndDateExcl should be provided in the configuration $DATE_FORMAT" }
 
 
-    val s3Service = S3Service(aws.region, aws.key, aws.secret, aws.dryRun)
+    val modules  = dependencies(env)
 
     try {
-        s3Service.ensureBucketExists(aws.documentsBucket)
+        modules.s3Service.ensureBucketExists(documentBucket)
     } catch (e: Exception) {
         println(e.message)
         exitProcess(1)
     }
 
-    val hikari = hikari(postgres)
-    val database = database(hikari)
 
 
     runBlocking {
         val duration = measureTime {
-            val invoices = database.invoicesQueries.selectAllInvoicesBetweenStartAndEndForClient(
-                toOffsetDateTime(params.depositStartDateIncl),
-                toOffsetDateTime(params.depositEndDateExcl),
-                UUID.fromString(params.clientId)
-            ) { client_name, restaurant_name, _, date, supplier_name, reference, document_id, total_inc, original_filename ->
-                Invoice(
-                    client_name!!.onlyKeepAlphaNumeric(),
-                    restaurant_name!!.onlyKeepAlphaNumeric(),
-                    date,
-                    supplier_name!!.onlyKeepAlphaNumeric(),
-                    reference!!,
-                    document_id,
-                    total_inc,
-                    original_filename!!
-                )
-            }.executeAsList()
+            val invoices = modules.invoicePersistence.getAllInvoices(
+                toOffsetDateTime(env.params.depositStartDateIncl),
+                toOffsetDateTime(endDate),
+                UUID.fromString(clientId)
+            )
+
 
             val firstInvoice = invoices.getOrNull(0)
             if (firstInvoice == null) {
                 println("No invoices")
                 return@runBlocking
             }
-            val toBucketName = toBucketName(firstInvoice, env)
+            val toBucketName = toBucketName(firstInvoice, env.env)
 
             try {
-                s3Service.copyInvoiceFileToClientBucket(aws.documentsBucket, toBucketName, invoices)
+                modules.s3Service.copyInvoiceFileToClientBucket(documentBucket, toBucketName, invoices)
             } catch (e: Exception) {
                 println("Failed to copy: ${e.message}")
             }
