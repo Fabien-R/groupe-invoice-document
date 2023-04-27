@@ -16,6 +16,7 @@ import kotlin.time.measureTime
 const val DATE_FORMAT = "yyyy-MM-dd"
 val PARAMS_DATE_FORMATTER: DateTimeFormatter = ofPattern(DATE_FORMAT)
 
+// Should be in InvoiceService if any InvoiceService was created
 data class Invoice(
     val clientName: String,
     val restaurantName: String,
