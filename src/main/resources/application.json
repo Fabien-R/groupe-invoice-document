@@ -5,8 +5,7 @@
         "host" : ,
         "database": ,
         "user": ,
-        "password": ,
-        "trustAll": true
+        "password":
     },
     "aws": {
         "region": "eu-west-1",
