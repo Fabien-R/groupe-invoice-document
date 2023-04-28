@@ -1,37 +1,40 @@
 import aws.sdk.kotlin.services.s3.S3Client
 import aws.sdk.kotlin.services.s3.headBucket
 import aws.sdk.kotlin.services.s3.model.*
-import aws.smithy.kotlin.runtime.auth.awscredentials.Credentials
-import aws.smithy.kotlin.runtime.auth.awscredentials.CredentialsProvider
 import kotlinx.coroutines.*
 import java.time.format.DateTimeFormatter
 import kotlin.math.round
 import kotlin.time.ExperimentalTime
 import kotlin.time.measureTime
 
-class S3CredentialProviderLight(key: String, secret: String) : CredentialsProvider {
-    private val credentials = Credentials(accessKeyId = key, secretAccessKey = secret)
-    override suspend fun getCredentials(): Credentials = credentials
+private const val DATE_FOLDER_FORMAT = "yyyy-MM"
+private const val DATE_FILE_FORMAT = "yyyy-MM-dd"
 
+interface S3Service {
+    fun ensureBucketExists(bucketName: String)
+    suspend fun copyInvoiceFileToClientBucket(fromBucket: String, toBucket: String, invoices: List<Invoice>)
+    // TODO refactor implementationPerFTest to not publish these internal
+    fun copyInvoiceDocumentCommand(fromBucket: String, toBucket: String, invoice: Invoice): suspend () -> Unit
+    suspend fun execute(command: suspend () -> Unit)
 }
 
 internal fun percentageRateWith2digits(number: Int, total: Int) = round(number.toFloat() * 10000 / total) / 100
 
 private fun Invoice.toS3Key(
-    dateFolderFormatter: DateTimeFormatter?,
-    dateFileFormatter: DateTimeFormatter?
+    dateFolderFormatter: DateTimeFormatter,
+    dateFileFormatter: DateTimeFormatter
 ) =
     "${this.restaurantName}/${this.date?.format(dateFolderFormatter) ?: "empty"}/${this.date?.format(dateFileFormatter) ?: ""} - ${this.supplierName} - ${this.documentId.hashCode()} - EUR - ${
         this.totalPriceIncl.toString().replace(".", "_")
     }.${this.originalFileName.substringAfterLast(".", "unknown")}"
 
 
-class S3Service(private val _region: String, private val _key: String, private val _secret: String, private val _dryRyn: Boolean) {
+fun s3Service(s3Client: S3Client, dryRyn: Boolean) = object : S3Service {
+    val dateFolderFormatter = DateTimeFormatter.ofPattern(DATE_FOLDER_FORMAT)
+    private val dateFileFormatter = DateTimeFormatter.ofPattern(DATE_FILE_FORMAT)
 
-    internal suspend fun execute(command: suspend () -> Unit) = if (!_dryRyn) command() else delay(100)
-    private val dateFolderFormatter = DateTimeFormatter.ofPattern("yyyy-MM")
-    private val dateFileFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
-    internal fun copyInvoiceDocumentCommand(fromBucket: String, toBucket: String, invoice: Invoice): suspend () -> Unit = {
+    override suspend fun execute(command: suspend () -> Unit) = if (!dryRyn) command() else delay(100)
+    override fun copyInvoiceDocumentCommand(fromBucket: String, toBucket: String, invoice: Invoice): suspend () -> Unit = {
         s3Client.copyS3Object(
             fromBucket,
             invoice.documentId.toString(),
@@ -40,21 +43,15 @@ class S3Service(private val _region: String, private val _key: String, private v
         )
     }
 
-    private val s3Client = S3Client {
-        region = _region
-        useArnRegion = true
-        credentialsProvider = S3CredentialProviderLight(key = _key, secret = _secret)
-    }
-
-    private suspend fun S3Client.bucketExists(s3bucket: String) =
+    private suspend fun S3Client.bucketExists(bucketName: String) =
         try {
-            headBucket { bucket = s3bucket }
+            headBucket { bucket = bucketName }
             true
         } catch (e: Exception) { // Checking Service Exception coming in future release
             false
         }
 
-    fun ensureBucketExists(bucketName: String) {
+    override fun ensureBucketExists(bucketName: String) {
         runBlocking {
             require(s3Client.bucketExists(bucketName)) { "Bucket $bucketName does not exist" }
         }
@@ -84,7 +81,7 @@ class S3Service(private val _region: String, private val _key: String, private v
     }
 
     @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
-    suspend fun copyInvoiceFileToClientBucket(fromBucket: String, toBucket: String, invoices: List<Invoice>) {
+    override suspend fun copyInvoiceFileToClientBucket(fromBucket: String, toBucket: String, invoices: List<Invoice>) {
         s3Client.createBucket(toBucket)
 
         val size = invoices.size
