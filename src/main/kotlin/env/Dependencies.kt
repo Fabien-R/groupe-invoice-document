@@ -1,6 +1,5 @@
 package env
 
-import S3Service
 import aws.sdk.kotlin.services.s3.S3Client
 import aws.smithy.kotlin.runtime.auth.awscredentials.Credentials
 import aws.smithy.kotlin.runtime.auth.awscredentials.CredentialsProvider
@@ -8,7 +7,9 @@ import database
 import hikari
 import repository.InvoicePersistence
 import repository.invoicePersistence
-import s3Service
+import s3.S3Service
+import s3.s3ClientWrapper
+import s3.s3Service
 
 class Dependencies(
     val s3Service: S3Service,
@@ -30,7 +31,7 @@ fun dependencies(env: Env): Dependencies {
         credentialsProvider = S3CredentialProviderLight(key = env.aws.key, secret = env.aws.secret)
     }
     return Dependencies(
-        s3Service(s3Client, env.aws.dryRun),
+        s3Service(s3ClientWrapper(s3Client, env.aws.dryRun)),
         invoicePersistence(database.invoicesQueries)
     )
 }
