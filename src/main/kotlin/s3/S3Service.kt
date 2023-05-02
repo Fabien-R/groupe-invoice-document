@@ -8,19 +8,14 @@ import kotlin.math.round
 import kotlin.time.ExperimentalTime
 import kotlin.time.measureTime
 
+internal fun percentageRateWith2digits(number: Int, total: Int) = round(number.toFloat() * 10000 / total) / 100
 
 interface S3Service {
     fun ensureBucketExists(bucketName: String)
     suspend fun copyInvoiceFileToClientBucket(fromBucket: String, toBucket: String, invoices: List<Invoice>)
 }
 
-
-internal fun percentageRateWith2digits(number: Int, total: Int) = round(number.toFloat() * 10000 / total) / 100
-
-fun s3Service(s3ClientWrapper: S3ClientWrapper): S3Service = S3ServiceImpl(s3ClientWrapper)
-
-class S3ServiceImpl(private val s3ClientWrapper: S3ClientWrapper) : S3Service {
-
+fun s3Service(s3ClientWrapper: S3ClientWrapper) = object : S3Service {
 
     override fun ensureBucketExists(bucketName: String) {
         runBlocking {
