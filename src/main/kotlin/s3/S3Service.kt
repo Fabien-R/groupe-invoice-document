@@ -19,8 +19,7 @@ internal fun percentageRateWith2digits(number: Int, total: Int) = round(number.t
 
 fun s3Service(s3ClientWrapper: S3ClientWrapper): S3Service = S3ServiceImpl(s3ClientWrapper)
 
-// TODO make wrapper private once perf implementation studied
-class S3ServiceImpl(val s3ClientWrapper: S3ClientWrapper) : S3Service {
+class S3ServiceImpl(private val s3ClientWrapper: S3ClientWrapper) : S3Service {
 
 
     override fun ensureBucketExists(bucketName: String) {
@@ -42,13 +41,16 @@ class S3ServiceImpl(val s3ClientWrapper: S3ClientWrapper) : S3Service {
         val concurrency = 1000
         val dispatcher = Dispatchers.Default.limitedParallelism(concurrency)
         val duration = measureTime {
-            copyInvoiceBase(invoices, fromBucket, toBucket, dispatcher, size)
+            with(s3ClientWrapper) {
+                copyInvoiceBase(invoices, fromBucket, toBucket, dispatcher, size)
+            }
         }
         println("Copy duration: $duration")
     }
 }
 
-suspend fun S3ServiceImpl.copyInvoiceBase(
+context(S3ClientWrapper)
+private suspend fun copyInvoiceBase(
     invoices: List<Invoice>,
     fromBucket: String,
     toBucketName: String,
@@ -56,9 +58,9 @@ suspend fun S3ServiceImpl.copyInvoiceBase(
     size: Int
 ) {
     coroutineScope {
-        invoices.map { invoice -> s3ClientWrapper.copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }.map {
+        invoices.map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }.map {
             this.launch(dispatcher) {
-                s3ClientWrapper.execute(Unit, it)
+                execute(Unit, it)
             }
         }.forEachIndexed { index, it ->
             it.join()
@@ -68,8 +70,9 @@ suspend fun S3ServiceImpl.copyInvoiceBase(
     }
 }
 
+context(S3ClientWrapper)
 @OptIn(ExperimentalCoroutinesApi::class)
-private suspend fun S3ServiceImpl.copyInvoiceBaseWithChannel(
+private suspend fun copyInvoiceBaseWithChannel(
     invoices: List<Invoice>,
     fromBucket: String,
     toBucketName: String,
@@ -78,9 +81,9 @@ private suspend fun S3ServiceImpl.copyInvoiceBaseWithChannel(
 ) {
     supervisorScope {
         val channel = produce(capacity = 300) {
-            invoices.map { invoice -> s3ClientWrapper.copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }.map {
+            invoices.map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }.map {
                 this.launch(dispatcher) {
-                    s3ClientWrapper.execute(Unit, it)
+                    execute(Unit, it)
                     send("plop")
                 }
             }
@@ -96,8 +99,9 @@ private suspend fun S3ServiceImpl.copyInvoiceBaseWithChannel(
     }
 }
 
+context(S3ClientWrapper)
 @OptIn(ExperimentalCoroutinesApi::class)
-private suspend fun S3ServiceImpl.copyInvoiceBaseWithChannel2(
+private suspend fun copyInvoiceBaseWithChannel2(
     invoices: List<Invoice>,
     fromBucket: String,
     toBucketName: String,
@@ -107,7 +111,7 @@ private suspend fun S3ServiceImpl.copyInvoiceBaseWithChannel2(
 ) {
     supervisorScope {
         val commandsChannel = produce(capacity = size) {
-            invoices.map { invoice -> s3ClientWrapper.copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }
+            invoices.map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }
                 .forEach {
                     send(it)
                 }
@@ -117,7 +121,7 @@ private suspend fun S3ServiceImpl.copyInvoiceBaseWithChannel2(
             repeat(concurrency) {
                 for (command in commandsChannel) {
                     launch(dispatcher) {
-                        s3ClientWrapper.execute(Unit, command)
+                        execute(Unit, command)
                         send("plop")
                     }
                 }
@@ -135,7 +139,8 @@ private suspend fun S3ServiceImpl.copyInvoiceBaseWithChannel2(
     }
 }
 
-private suspend fun S3ServiceImpl.copyInvoices2(
+context(S3ClientWrapper)
+private suspend fun copyInvoices2(
     invoices: List<Invoice>,
     fromBucket: String,
     toBucketName: String,
@@ -144,9 +149,9 @@ private suspend fun S3ServiceImpl.copyInvoices2(
     concurrency: Int,
 ) =
     invoices.asFlow()
-        .map { invoice -> s3ClientWrapper.copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }
+        .map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }
         .concurrentMap(dispatcher, concurrency) {
-            s3ClientWrapper.execute(Unit, it)
+            execute(Unit, it)
         }
         .scan(0) { acc, _ -> acc + 1 }
         .collect {
@@ -161,9 +166,9 @@ private fun <T, R> Flow<T>.concurrentMap(dispatcher: CoroutineDispatcher, concur
     }.flowOn(dispatcher)
 }
 
-
+context(S3ClientWrapper)
 @OptIn(FlowPreview::class)
-private suspend fun S3ServiceImpl.copyInvoices3(
+private suspend fun copyInvoices3(
     invoices: List<Invoice>,
     fromBucket: String,
     toBucketName: String,
@@ -174,11 +179,11 @@ private suspend fun S3ServiceImpl.copyInvoices3(
     val chunkSize = Integer.max(round(size / concurrency.toFloat()).toInt(), 1)
     println("chunksize: $chunkSize")
     invoices
-        .map { invoice -> s3ClientWrapper.copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }
+        .map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }
         .chunked(chunkSize).asFlow()
         .onStart { println("Start copy") }
         .flatMapMerge(concurrency) { copyCommands ->
-            copyCommands.asFlow().onEach { s3ClientWrapper.execute(Unit, it) }
+            copyCommands.asFlow().onEach { execute(Unit, it) }
         }
         .flowOn(dispatcher)
         .scan(0) { acc, _ -> acc + 1 }
