@@ -1,6 +1,9 @@
+import arrow.core.raise.either
+import arrow.core.raise.ensureNotNull
+import env.Dependencies
+import env.Env
 import env.dependencies
 import env.getConfiguration
-import kotlinx.coroutines.runBlocking
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -8,7 +11,6 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeFormatter.ofPattern
 import java.util.*
-import kotlin.system.exitProcess
 import kotlin.time.ExperimentalTime
 import kotlin.time.measureTime
 
@@ -36,8 +38,7 @@ fun toOffsetDateTime(date: String): OffsetDateTime = OffsetDateTime.of(
 
 private fun toBucketName(invoice: Invoice, env: String): String = "agapio-client-${invoice.clientName.lowercase()}-$env"
 
-@OptIn(ExperimentalTime::class)
-fun main() {
+suspend fun main() {
     val env = getConfiguration()
 
     val clientId = env.params.clientId
@@ -50,19 +51,26 @@ fun main() {
     require(endDate.isNotBlank()) { "depositEndDateExcl should be provided in the configuration $DATE_FORMAT" }
 
 
-    val modules  = dependencies(env)
+    val modules = dependencies(env)
 
-    try {
-        modules.s3Service.ensureBucketExists(documentBucket)
-    } catch (e: Exception) {
-        println(e.message)
-        exitProcess(1)
-    }
+    copyDepositFiles(modules, documentBucket, env, endDate, clientId)
+
+}
+
+@OptIn(ExperimentalTime::class)
+private suspend fun copyDepositFiles(
+    modules: Dependencies,
+    documentBucket: String,
+    env: Env,
+    endDate: String,
+    clientId: String
+) {
+    val duration = measureTime {
+        either {
 
 
+            modules.s3Service.ensureBucketExists(documentBucket).bind()
 
-    runBlocking {
-        val duration = measureTime {
             val invoices = modules.invoicePersistence.getAllInvoices(
                 toOffsetDateTime(env.params.depositStartDateIncl),
                 toOffsetDateTime(endDate),
@@ -70,19 +78,20 @@ fun main() {
             )
 
 
-            val firstInvoice = invoices.getOrNull(0)
-            if (firstInvoice == null) {
-                println("No invoices")
-                return@runBlocking
-            }
+            val firstInvoice = ensureNotNull(invoices.getOrNull(0)) { NoInvoice }
             val toBucketName = toBucketName(firstInvoice, env.env)
 
-            try {
-                modules.s3Service.copyInvoiceFileToClientBucket(documentBucket, toBucketName, invoices)
-            } catch (e: Exception) {
-                println("Failed to copy: ${e.message}")
-            }
-        }
-        println("Total duration: $duration")
+            modules.s3Service.copyInvoiceFileToClientBucket(documentBucket, toBucketName, invoices).bind()
+
+
+        }.mapLeft(DomainError::toLog)
     }
+    println("Total duration: $duration")
+}
+
+fun DomainError.toLog() {
+    when (this) {
+        is CopiesFailures -> failures.map(DomainError::toString)
+        else -> listOf(this.toString())
+    }.forEach(::println)
 }

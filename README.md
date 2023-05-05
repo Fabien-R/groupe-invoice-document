@@ -7,8 +7,8 @@ It was my first play with Kotlin. I will re-use it in order to test other kotlin
 Goals: 
 1. Pull out the sql queries from the code using [SQLDelight](https://cashapp.github.io/sqldelight)
 2. if any? (control concurrency, today open bar)
-3. ContextReceiver?
-4. Better/Generic error handling ([arrow](https://arrow-kt.io/)? ) 
+3. ContextReceiver
+4. Better/Generic error handling (Use[arrow](https://arrow-kt.io/) Effect to pull out exception handling outside the model. [Practical explanation](https://www.youtube.com/watch?v=T04ynq2IVFs) , [Types Error Handling Comparison in Kotlin](https://betterprogramming.pub/typed-error-handling-in-kotlin-11ff25882880)) 
 
 ---
 ---
