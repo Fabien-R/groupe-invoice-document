@@ -9,8 +9,6 @@ import BucketOtherException
 import CopyFailure
 import Invoice
 import arrow.core.Either
-import arrow.core.flatMap
-import arrow.core.left
 import arrow.core.right
 import aws.sdk.kotlin.runtime.AwsServiceException
 import aws.sdk.kotlin.runtime.auth.credentials.internal.sso.model.UnauthorizedException
@@ -66,31 +64,22 @@ fun s3ClientWrapper(s3Client: S3Client, dryRyn: Boolean) = object : S3ClientWrap
     }
 
     override fun createBucketCommand(bucketName: String): suspend () -> Either<BucketError, Unit> = {
-        bucketExistCommand(bucketName).invoke().fold({ bucketError: BucketError ->
-            if (bucketError is BucketNotFound)
-                Unit.right()
-            else {
-                bucketError.left()
-            }
-        },
-            { _ -> BucketAlreadyExist(bucketName).left() }
-        ).flatMap {
-            Either.catchOrThrow<AwsServiceException, Unit> {
-                s3Client.createBucket(CreateBucketRequest {
-                    bucket = bucketName
-                    createBucketConfiguration = CreateBucketConfiguration {
-                        locationConstraint = BucketLocationConstraint.EuWest1
-                    }
-                    acl = BucketCannedAcl.fromValue("private")
-                })
-            }.mapLeft { s3Exception ->
-                when {
-                    s3Exception is NotFound -> BucketNotFound(bucketName)
-                    s3Exception is UnauthorizedException -> BucketAccessForbidden(bucketName)
-                    s3Exception is BucketAlreadyExists -> BucketAlreadyExist(bucketName)
-                    s3Exception is S3Exception && (s3Exception.message?.contains("is not valid") ?: false) -> BucketNotValid(bucketName)
-                    else -> BucketOtherException(bucketName, s3Exception::class.simpleName)
+        Either.catchOrThrow<AwsServiceException, Unit> {
+            s3Client.createBucket(CreateBucketRequest {
+                bucket = bucketName
+                createBucketConfiguration = CreateBucketConfiguration {
+                    locationConstraint = BucketLocationConstraint.EuWest1
                 }
+                acl = BucketCannedAcl.fromValue("private")
+            })
+        }.mapLeft { s3Exception ->
+            when {
+                s3Exception is NotFound -> BucketNotFound(bucketName)
+                s3Exception is UnauthorizedException -> BucketAccessForbidden(bucketName)
+                s3Exception is BucketAlreadyExists -> BucketAlreadyExist(bucketName)
+                s3Exception is BucketAlreadyOwnedByYou -> BucketAlreadyExist(bucketName)
+                s3Exception is S3Exception && (s3Exception.message?.contains("is not valid") ?: false) -> BucketNotValid(bucketName)
+                else -> BucketOtherException(bucketName, s3Exception::class.simpleName)
             }
         }
     }
