@@ -83,7 +83,6 @@ private suspend fun copyInvoiceWithArrowConcurrency(
     fromBucket: String,
     toBucketName: String,
     dispatcher: CoroutineDispatcher,
-    size: Int
 ): Either<BucketError, List<Unit>> =
     invoices
         .map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }

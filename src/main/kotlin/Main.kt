@@ -1,7 +1,6 @@
 import arrow.core.raise.either
 import arrow.core.raise.ensureNotNull
 import env.Dependencies
-import env.Env
 import env.dependencies
 import env.getConfiguration
 import java.time.LocalDate
@@ -53,7 +52,7 @@ suspend fun main() {
 
     val modules = dependencies(env)
 
-    copyDepositFiles(modules, documentBucket, env, endDate, clientId)
+    copyDepositFiles(modules, documentBucket, startDate, endDate, clientId, env.env)
 
 }
 
@@ -61,9 +60,10 @@ suspend fun main() {
 private suspend fun copyDepositFiles(
     modules: Dependencies,
     documentBucket: String,
-    env: Env,
+    startDate: String,
     endDate: String,
-    clientId: String
+    clientId: String,
+    env: String
 ) {
     val duration = measureTime {
         either {
@@ -72,14 +72,14 @@ private suspend fun copyDepositFiles(
             modules.s3Service.ensureBucketExists(documentBucket).bind()
 
             val invoices = modules.invoicePersistence.getAllInvoices(
-                toOffsetDateTime(env.params.depositStartDateIncl),
+                toOffsetDateTime(startDate),
                 toOffsetDateTime(endDate),
                 UUID.fromString(clientId)
             )
 
 
             val firstInvoice = ensureNotNull(invoices.getOrNull(0)) { NoInvoice }
-            val toBucketName = toBucketName(firstInvoice, env.env)
+            val toBucketName = toBucketName(firstInvoice, env)
 
             modules.s3Service.copyInvoiceFileToClientBucket(documentBucket, toBucketName, invoices).bind()
 
