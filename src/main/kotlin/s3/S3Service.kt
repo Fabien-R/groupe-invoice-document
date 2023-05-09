@@ -4,6 +4,7 @@ import BucketError
 import CopiesFailures
 import Invoice
 import arrow.core.Either
+import arrow.core.flattenOrAccumulate
 import arrow.core.raise.either
 import arrow.fx.coroutines.parMapOrAccumulate
 import kotlinx.coroutines.*
@@ -22,7 +23,6 @@ interface S3Service {
 
 fun s3Service(s3ClientWrapper: S3ClientWrapper) = object : S3Service {
 
-    //    context(Raise<BucketError>) ERROR when declared
     override suspend fun ensureBucketExists(bucketName: String): Either<BucketError, Unit> =
         s3ClientWrapper.execute(s3ClientWrapper.bucketExistCommand(bucketName))
 
@@ -36,67 +36,90 @@ fun s3Service(s3ClientWrapper: S3ClientWrapper) = object : S3Service {
         either {
 
             createBucket(toBucket).bind()
-
-            val size = invoices.size
-            val concurrency = 1000
+            val concurrency = 101
             val dispatcher = Dispatchers.Default.limitedParallelism(concurrency)
-            val duration = measureTime {
-                with(s3ClientWrapper) {
-                    // TODO When failing the flow is broken before login the copy duration
-                    // copyInvoiceWithArrowConcurrency(invoices, fromBucket, toBucket, dispatcher, size).bind()
-                    copyInvoiceBase(invoices, fromBucket, toBucket, dispatcher, size)
+
+            // FIXME find another way fixing the lost of value + the need of cancelling the display at the end
+            val progress: MutableStateFlow<Progress> = MutableStateFlow(Progress(0, 0, invoices.size))
+            coroutineScope {
+                val consoleDisplayer = launch(dispatcher) {
+                    var tempo = 0
+                    val step = 100
+                    progress.collect {
+                        // MutableStateFlow is conflated meaning if the consumer is too slow, will only have the last value -> loose some value
+                        if (it.current >= tempo) {
+                            tempo += step
+                            println("${percentageRateWith2digits(it.current, it.total)}%")
+                        }
+                    }
                 }
+
+
+                val duration = measureTime {
+                    with(s3ClientWrapper) {
+                        // TODO When failing the flow is broken before login the copy duration
+                        copyInvoiceWithArrowConcurrency(invoices, fromBucket, toBucket, dispatcher, progress).bind()
+//                        copyInvoiceBase(invoices, fromBucket, toBucket, dispatcher, progress).bind()
+                    }
+                }
+
+                println("Copy duration: $duration")
+
+                // StateFlow never stops
+                delay(100)
+                consoleDisplayer.cancel()
             }
-            println("Copy duration: $duration")
         }
 }
 
 
-context(S3ClientWrapper)
-private suspend fun copyInvoiceBase(
+context(S3ClientWrapper, CoroutineScope)
+        private suspend fun copyInvoiceBase(
     invoices: List<Invoice>,
     fromBucket: String,
     toBucketName: String,
     dispatcher: CoroutineDispatcher,
-    size: Int
-) /*: Either<BucketError, Unit> */ =
-    coroutineScope {
-            invoices.map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }.map {
-                this@coroutineScope.launch(dispatcher) {
-                    either { execute(it).bind() }
-                        // Trick to send the error another consumer (console) without splitting this flow...
-                        .mapLeft { println(it) }
-                }
-            }.forEachIndexed { index, it ->
-                // whatever the success or failure we can still monitor progress
-                it.join()
-                if (index % 100 == 0)
-                    println("${percentageRateWith2digits(index, size)}%")
-            }
+    progress: MutableStateFlow<Progress>
+): Either<CopiesFailures, List<Unit>> =
+    invoices.map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }.map {
+        async(dispatcher) {
+            either { executeWithProgress(it, progress).bind() }
         }
+    }.awaitAll().flattenOrAccumulate().mapLeft {
+        CopiesFailures(toBucketName).appendAll(it.toList())
+    }
 
 
-// TODO not able to monitor progress
+data class Progress(val current: Int, val failures: Int, val total: Int)
+
 context(S3ClientWrapper)
 private suspend fun copyInvoiceWithArrowConcurrency(
     invoices: List<Invoice>,
     fromBucket: String,
     toBucketName: String,
     dispatcher: CoroutineDispatcher,
+    progress: MutableStateFlow<Progress>
 ): Either<BucketError, List<Unit>> =
     invoices
         .map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }
-        .parMapOrAccumulate(context = dispatcher, concurrency = 1000) {
-            execute(it).bind()
+        .parMapOrAccumulate(context = dispatcher, concurrency = 1000) { command ->
+            executeWithProgress(command, progress).bind()
         }.mapLeft {
-            CopiesFailures(toBucketName, it.toList())
+            CopiesFailures(toBucketName).appendAll(it.toList())
         }
-//        .forEachIndexed { index, _ ->
-//            //it.
-//            if (index % 100 == 0)
-//                println("${percentageRateWith2digits(index, size)}%")
-//        }
 
+
+private suspend fun S3ClientWrapper.executeWithProgress(
+    command: suspend () -> Either<BucketError, Unit>,
+    progress: MutableStateFlow<Progress>
+) =
+    execute(command)
+        .onRight {
+            progress.update { it.copy(current = it.current.inc()) }
+        }
+        .onLeft {
+            progress.update { it.copy(current = it.current.inc(), failures = it.failures.inc()) }
+        }
 
 
 // --- Other attempts not migrated to arrow Type error handling
