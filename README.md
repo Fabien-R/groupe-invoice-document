@@ -41,10 +41,9 @@ For now the execution arguments are pass via the same [application.json](src/mai
   The format should be `yyyy-MM-dd`
 
 ##  Execution
-The utility will display in the console 
+The utility displays in the console 
 1. the number of invoice-files it has to copy 
-2. a percentage progress after copying each file
-3. and finally a success or error message `Succeeded to copy`
+2. a percentage progress regurlaly
 
 ## Limitations
 1. Using sequential flow or parallel copy processing take the same amount of time --> something wrong in our implementation or a limitation/constraint in the kotlin aws sdk s3-client?

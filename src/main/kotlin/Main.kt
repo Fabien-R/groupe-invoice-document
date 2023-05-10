@@ -67,8 +67,6 @@ private suspend fun copyDepositFiles(
 ) {
     val duration = measureTime {
         either {
-
-
             modules.s3Service.ensureBucketExists(documentBucket).bind()
 
             val invoices = modules.invoicePersistence.getAllInvoices(
@@ -77,12 +75,11 @@ private suspend fun copyDepositFiles(
                 UUID.fromString(clientId)
             )
 
-
             val firstInvoice = ensureNotNull(invoices.getOrNull(0)) { NoInvoice }
             val toBucketName = toBucketName(firstInvoice, env)
+            println("${invoices.size} invoice-files to copy")
 
             modules.s3Service.copyInvoiceFileToClientBucket(documentBucket, toBucketName, invoices).bind()
-
 
         }.mapLeft(DomainError::toLog)
     }
