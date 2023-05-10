@@ -14,7 +14,23 @@ import kotlin.math.round
 import kotlin.time.ExperimentalTime
 import kotlin.time.measureTime
 
+const val PROGRESSION_DELAY_MILLIS = 10000L
+
 internal fun percentageRateWith2digits(number: Int, total: Int) = round(number.toFloat() * 10000 / total) / 100
+
+context(CoroutineScope)
+        private fun launchConsoleDisplayer(
+    dispatcher: CoroutineDispatcher,
+    progress: MutableStateFlow<Progress>
+): Job {
+    val consoleDisplayer = launch(dispatcher) {
+        do {
+            progress.value.let { println("${percentageRateWith2digits(it.current, it.total)}%") }
+            delay(PROGRESSION_DELAY_MILLIS)
+        } while (true)
+    }
+    return consoleDisplayer
+}
 
 interface S3Service {
     suspend fun ensureBucketExists(bucketName: String): Either<BucketError, Unit>
@@ -39,21 +55,10 @@ fun s3Service(s3ClientWrapper: S3ClientWrapper) = object : S3Service {
             val concurrency = 101
             val dispatcher = Dispatchers.Default.limitedParallelism(concurrency)
 
-            // FIXME find another way fixing the lost of value + the need of cancelling the display at the end
+            // conflated
             val progress: MutableStateFlow<Progress> = MutableStateFlow(Progress(0, 0, invoices.size))
             coroutineScope {
-                val consoleDisplayer = launch(dispatcher) {
-                    var tempo = 0
-                    val step = 100
-                    progress.collect {
-                        // MutableStateFlow is conflated meaning if the consumer is too slow, will only have the last value -> loose some value
-                        if (it.current >= tempo) {
-                            tempo += step
-                            println("${percentageRateWith2digits(it.current, it.total)}%")
-                        }
-                    }
-                }
-
+                val consoleDisplayer = launchConsoleDisplayer(dispatcher, progress)
 
                 val duration = measureTime {
                     with(s3ClientWrapper) {
@@ -65,8 +70,6 @@ fun s3Service(s3ClientWrapper: S3ClientWrapper) = object : S3Service {
 
                 println("Copy duration: $duration")
 
-                // StateFlow never stops
-                delay(100)
                 consoleDisplayer.cancel()
             }
         }
