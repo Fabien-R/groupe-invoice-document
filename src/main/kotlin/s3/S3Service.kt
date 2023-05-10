@@ -8,7 +8,6 @@ import arrow.core.flattenOrAccumulate
 import arrow.core.raise.either
 import arrow.fx.coroutines.parMapOrAccumulate
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.flow.*
 import kotlin.math.round
 import kotlin.time.ExperimentalTime
@@ -63,8 +62,10 @@ fun s3Service(s3ClientWrapper: S3ClientWrapper) = object : S3Service {
                 val duration = measureTime {
                     with(s3ClientWrapper) {
                         // TODO When failing the flow is broken before login the copy duration
-                        copyInvoiceWithArrowConcurrency(invoices, fromBucket, toBucket, dispatcher, progress).bind()
-//                        copyInvoiceBase(invoices, fromBucket, toBucket, dispatcher, progress).bind()
+//                        copyInvoicesWithArrowConcurrency(invoices, fromBucket, toBucket, dispatcher, progress).bind()
+                        copyInvoicesBase(invoices, fromBucket, toBucket, dispatcher, progress).bind()
+//                        copyInvoices2(invoices, fromBucket, toBucket, dispatcher, concurrency, progress).bind()
+//                        copyInvoices3(invoices, fromBucket, toBucket, dispatcher, concurrency, progress).bind()
                     }
                 }
 
@@ -77,7 +78,7 @@ fun s3Service(s3ClientWrapper: S3ClientWrapper) = object : S3Service {
 
 
 context(S3ClientWrapper, CoroutineScope)
-        private suspend fun copyInvoiceBase(
+        private suspend fun copyInvoicesBase(
     invoices: List<Invoice>,
     fromBucket: String,
     toBucketName: String,
@@ -96,7 +97,7 @@ context(S3ClientWrapper, CoroutineScope)
 data class Progress(val current: Int, val failures: Int, val total: Int)
 
 context(S3ClientWrapper)
-private suspend fun copyInvoiceWithArrowConcurrency(
+private suspend fun copyInvoicesWithArrowConcurrency(
     invoices: List<Invoice>,
     fromBucket: String,
     toBucketName: String,
@@ -125,25 +126,21 @@ private suspend fun S3ClientWrapper.executeWithProgress(
         }
 
 
-// --- Other attempts not migrated to arrow Type error handling
 context(S3ClientWrapper)
 private suspend fun copyInvoices2(
     invoices: List<Invoice>,
     fromBucket: String,
     toBucketName: String,
     dispatcher: CoroutineDispatcher,
-    size: Int,
     concurrency: Int,
-) =
+    progress: MutableStateFlow<Progress>,
+): Either<BucketError, List<Unit>> =
     invoices.asFlow()
         .map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }
         .concurrentMap(dispatcher, concurrency) {
-            execute(it)
-        }
-        .scan(0) { acc, _ -> acc + 1 }
-        .collect {
-            if (it % 100 == 0)
-                println("${percentageRateWith2digits(it, size)}%")
+            either { executeWithProgress(it, progress).bind() }
+        }.toList().flattenOrAccumulate().mapLeft {
+            CopiesFailures(toBucketName).appendAll(it.toList())
         }
 
 @OptIn(FlowPreview::class)
@@ -160,23 +157,16 @@ private suspend fun copyInvoices3(
     fromBucket: String,
     toBucketName: String,
     dispatcher: CoroutineDispatcher,
-    size: Int,
     concurrency: Int,
-) {
-    val chunkSize = Integer.max(round(size / concurrency.toFloat()).toInt(), 1)
-    println("chunksize: $chunkSize")
+    progress: MutableStateFlow<Progress>,
+): Either<CopiesFailures, List<Unit>> =
     invoices
         .map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }
-        .chunked(chunkSize).asFlow()
-        .onStart { println("Start copy") }
+        .chunked(Integer.max(round(invoices.size / concurrency.toFloat()).toInt(), 1)).asFlow() // batch invoices command
         .flatMapMerge(concurrency) { copyCommands ->
-            copyCommands.asFlow().onEach { execute(it) }
+            copyCommands.asFlow().map { either { executeWithProgress(it, progress).bind() } }
         }
         .flowOn(dispatcher)
-        .scan(0) { acc, _ -> acc + 1 }
-        .onCompletion { println("Copy done ") }
-        .filter { it % 100 == 0 }
-        .collect {
-            println("${percentageRateWith2digits(it, size)}%")
+        .toList().flattenOrAccumulate().mapLeft {
+            CopiesFailures(toBucketName).appendAll(it.toList())
         }
-}
