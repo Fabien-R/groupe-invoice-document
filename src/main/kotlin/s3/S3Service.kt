@@ -56,22 +56,23 @@ fun s3Service(s3ClientWrapper: S3ClientWrapper) = object : S3Service {
 
             // conflated
             val progress: MutableStateFlow<Progress> = MutableStateFlow(Progress(0, 0, invoices.size))
+
             coroutineScope {
                 val consoleDisplayer = launchConsoleDisplayer(dispatcher, progress)
-
+                var copy: Either<CopiesFailures, List<Unit>>
                 val duration = measureTime {
                     with(s3ClientWrapper) {
-                        // TODO When failing the flow is broken before login the copy duration
-//                        copyInvoicesWithArrowConcurrency(invoices, fromBucket, toBucket, dispatcher, progress).bind()
-                        copyInvoicesBase(invoices, fromBucket, toBucket, dispatcher, progress).bind()
-//                        copyInvoices2(invoices, fromBucket, toBucket, dispatcher, concurrency, progress).bind()
-//                        copyInvoices3(invoices, fromBucket, toBucket, dispatcher, concurrency, progress).bind()
+//                        copy = copyInvoicesWithArrowConcurrency(invoices, fromBucket, toBucket, dispatcher, progress)
+                        copy = copyInvoicesBase(invoices, fromBucket, toBucket, dispatcher, progress)
+//                        copy = copyInvoices2(invoices, fromBucket, toBucket, dispatcher, concurrency, progress)
+//                        copy = copyInvoices3(invoices, fromBucket, toBucket, dispatcher, concurrency, progress)
                     }
                 }
 
                 println("Copy duration: $duration")
-
                 consoleDisplayer.cancel()
+                // FIXME Not satisfying. Returning an either should be cleaner + not need to interrupt the flow here
+                copy.bind() // binding later to have the copy duration
             }
         }
 }
