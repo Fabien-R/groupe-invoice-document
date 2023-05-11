@@ -1,13 +1,11 @@
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
+@Suppress("DSL_SCOPE_VIOLATION")
 plugins {
-    kotlin("jvm") version "1.7.10"
-    id("app.cash.sqldelight") version "2.0.0-alpha05"
     application
+    alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.sqldelight)
 }
-
-group = "me.fabie"
-version = "1.0-SNAPSHOT"
 
 repositories {
     mavenCentral()
@@ -15,15 +13,13 @@ repositories {
 
 dependencies {
     testImplementation(kotlin("test"))
-    implementation("app.cash.sqldelight:jdbc-driver:2.0.0-alpha05")
-    implementation("com.zaxxer:HikariCP:5.0.1")
-    implementation("org.postgresql:postgresql:42.6.0")
-    implementation("aws.sdk.kotlin:s3:0.19.5-beta")
-    implementation("com.sksamuel.hoplite:hoplite-core:2.7.0")
-    implementation("com.sksamuel.hoplite:hoplite-json:2.7.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4")
-    implementation("io.arrow-kt:arrow-core:1.2.0-RC")
-    implementation("io.arrow-kt:arrow-fx-coroutines:1.2.0-RC")
+    implementation(libs.bundles.arrow)
+    implementation(libs.aws.sdk.kotlin.s3)
+    implementation(libs.coroutines.core)
+    implementation(libs.hikari)
+    implementation(libs.bundles.hoplite)
+    implementation(libs.postgresql)
+    implementation(libs.sqldelight.jdbc)
 }
 
 tasks.test {
@@ -46,7 +42,7 @@ sqldelight {
         create("Database") {
             packageName.set("com.github.fabien")
             sourceFolders.set(listOf("sqldelight"))
-            dialect("app.cash.sqldelight:postgresql-dialect:2.0.0-alpha05")
+            dialect(libs.sqldelight.postgresql.get())
             deriveSchemaFromMigrations
         }
     }
