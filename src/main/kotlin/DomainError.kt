@@ -1,3 +1,7 @@
+import arrow.core.raise.Raise
+
+typealias DomainErrors = Raise<BucketError>
+
 sealed interface DomainError {
     override fun toString(): String
 }

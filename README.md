@@ -9,6 +9,7 @@ Goals:
 2. control concurrency (different implementation, below small performance comparison)
 3. ContextReceiver
 4. Better/Generic error handling (Use[arrow](https://arrow-kt.io/) Effect to pull out exception handling outside the model. [Practical explanation](https://www.youtube.com/watch?v=T04ynq2IVFs) , [Types Error Handling Comparison in Kotlin](https://betterprogramming.pub/typed-error-handling-in-kotlin-11ff25882880)) 
+5. Context Receiver to hide Arrow either type: Not possible yet, ContextReceiver is still experimental and the [Kotlin compiler is still shaky about it](https://slack-chats.kotlinlang.org/t/9524257/first-compile-with-the-latest-alpha-caused-by-java-lang-ille#14c8ba77-e851-48d1-8399-2ef96858f568)  /!\ POSTPONE
 
 ---
 ---
