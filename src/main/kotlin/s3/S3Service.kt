@@ -13,7 +13,8 @@ import kotlin.math.round
 import kotlin.time.ExperimentalTime
 import kotlin.time.measureTime
 
-const val PROGRESSION_DELAY_MILLIS = 10000L
+const val PROGRESSION_DELAY_MILLIS = 20000L
+const val CONCURRENCY_LIMITATION = 1000
 
 internal fun percentageRateWith2digits(number: Int, total: Int) = round(number.toFloat() * 10000 / total) / 100
 
@@ -49,9 +50,9 @@ fun s3Service(s3ClientWrapper: S3ClientWrapper) = object : S3Service {
     @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
     override suspend fun copyInvoiceFileToClientBucket(fromBucket: String, toBucket: String, invoices: List<Invoice>): Either<BucketError, Unit> =
         either {
-
-            createBucket(toBucket).bind()
-            val concurrency = 101
+            val bucketName = "${toBucket}0"
+            createBucket(bucketName).bind()
+            val concurrency = CONCURRENCY_LIMITATION
             val dispatcher = Dispatchers.Default.limitedParallelism(concurrency)
 
             // conflated
@@ -59,18 +60,20 @@ fun s3Service(s3ClientWrapper: S3ClientWrapper) = object : S3Service {
 
             coroutineScope {
                 val consoleDisplayer = launchConsoleDisplayer(dispatcher, progress)
-                var copy: Either<CopiesFailures, List<Unit>>
+                var copy: Either<BucketError, List<Unit>>
                 val duration = measureTime {
                     with(s3ClientWrapper) {
-//                        copy = copyInvoicesWithArrowConcurrency(invoices, fromBucket, toBucket, dispatcher, progress)
-                        copy = copyInvoicesBase(invoices, fromBucket, toBucket, dispatcher, progress)
-//                        copy = copyInvoices2(invoices, fromBucket, toBucket, dispatcher, concurrency, progress)
-//                        copy = copyInvoices3(invoices, fromBucket, toBucket, dispatcher, concurrency, progress)
+//                        copy = copyInvoicesBase(invoices, fromBucket, bucketName, dispatcher, progress)
+                        copy = copyInvoicesWithArrowConcurrency(invoices, fromBucket, bucketName, dispatcher, progress)
+//                        copy = copyInvoicesWithOwnConcurrentMapConcurrency(invoices, fromBucket, bucketName, dispatcher, concurrency - 1, progress)
+//                        copy = copyInvoicesWithChunkAndFlatMapMerge(invoices, fromBucket, bucketName, dispatcher, concurrency - 1, progress)
                     }
                 }
 
                 println("Copy duration: $duration")
                 consoleDisplayer.cancel()
+
+//                s3ClientWrapper.execute(s3ClientWrapper.emptyAndDeleteBucketCommand(bucketName)).bind()
                 // FIXME Not satisfying. Returning an either should be cleaner + not need to interrupt the flow here
                 copy.bind() // binding later to have the copy duration
             }
@@ -85,7 +88,7 @@ context(S3ClientWrapper, CoroutineScope)
     toBucketName: String,
     dispatcher: CoroutineDispatcher,
     progress: MutableStateFlow<Progress>
-): Either<CopiesFailures, List<Unit>> =
+): Either<BucketError, List<Unit>> =
     invoices.map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }.map {
         async(dispatcher) {
             either { executeWithProgress(it, progress).bind() }
@@ -128,7 +131,7 @@ private suspend fun S3ClientWrapper.executeWithProgress(
 
 
 context(S3ClientWrapper)
-private suspend fun copyInvoices2(
+private suspend fun copyInvoicesWithOwnConcurrentMapConcurrency(
     invoices: List<Invoice>,
     fromBucket: String,
     toBucketName: String,
@@ -153,14 +156,14 @@ private fun <T, R> Flow<T>.concurrentMap(dispatcher: CoroutineDispatcher, concur
 
 context(S3ClientWrapper)
 @OptIn(FlowPreview::class)
-private suspend fun copyInvoices3(
+private suspend fun copyInvoicesWithChunkAndFlatMapMerge(
     invoices: List<Invoice>,
     fromBucket: String,
     toBucketName: String,
     dispatcher: CoroutineDispatcher,
     concurrency: Int,
     progress: MutableStateFlow<Progress>,
-): Either<CopiesFailures, List<Unit>> =
+): Either<BucketError, List<Unit>> =
     invoices
         .map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }
         .chunked(Integer.max(round(invoices.size / concurrency.toFloat()).toInt(), 1)).asFlow() // batch invoices command

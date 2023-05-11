@@ -13,9 +13,12 @@ import arrow.core.right
 import aws.sdk.kotlin.runtime.AwsServiceException
 import aws.sdk.kotlin.runtime.auth.credentials.internal.sso.model.UnauthorizedException
 import aws.sdk.kotlin.services.s3.S3Client
+import aws.sdk.kotlin.services.s3.deleteObjects
 import aws.sdk.kotlin.services.s3.headBucket
 import aws.sdk.kotlin.services.s3.model.*
+import aws.sdk.kotlin.services.s3.paginators.listObjectsV2Paginated
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.map
 import java.time.format.DateTimeFormatter
 
 private const val DATE_FOLDER_FORMAT = "yyyy-MM"
@@ -26,6 +29,11 @@ interface S3ClientWrapper {
     fun copyInvoiceDocumentCommand(fromBucket: String, toBucket: String, invoice: Invoice): suspend () -> Either<BucketError, Unit>
     fun bucketExistCommand(bucketName: String): suspend () -> Either<BucketError, Unit>
     fun createBucketCommand(bucketName: String): suspend () -> Either<BucketError, Unit>
+
+    /**
+     * Cleaning utility for automating performance measurement
+     */
+    fun emptyAndDeleteBucketCommand(bucketName: String): suspend () -> Either<BucketError, Unit>
 
 }
 
@@ -100,6 +108,37 @@ fun s3ClientWrapper(s3Client: S3Client, dryRyn: Boolean) = object : S3ClientWrap
                 else -> CopyFailure(toBucket, fromKey, s3Exception.message ?: "")
             }
         }
+
+
+    // implementation can be enhanced to separate the different commands
+    override fun emptyAndDeleteBucketCommand(bucketName: String): suspend () -> Either<BucketError, Unit> = {
+        Either.catchOrThrow<AwsServiceException, Unit> {
+            s3Client.listObjectsV2Paginated(ListObjectsV2Request {
+                bucket = bucketName
+            })
+                .map { it.contents ?: emptyList() }
+                .map { keys -> keys.map { ObjectIdentifier { key = it.key } } }
+                .collect { keys ->
+                    s3Client.deleteObjects {
+                        bucket = bucketName
+                        delete {
+                            objects = keys
+                        }
+                    }
+                }
+
+            s3Client.deleteBucket(DeleteBucketRequest {
+                bucket = bucketName
+            })
+        }.mapLeft { s3Exception ->
+            when {
+                s3Exception is NotFound -> BucketNotFound(bucketName)
+                s3Exception is UnauthorizedException -> BucketAccessForbidden(bucketName)
+                s3Exception is S3Exception && (s3Exception.message?.contains("is not valid") ?: false) -> BucketNotValid(bucketName)
+                else -> BucketOtherException(bucketName, s3Exception::class.simpleName)
+            }
+        }
+    }
 }
 
 private fun Invoice.toS3Key(
