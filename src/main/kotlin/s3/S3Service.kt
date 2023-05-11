@@ -11,7 +11,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlin.math.round
 import kotlin.time.ExperimentalTime
-import kotlin.time.measureTime
+import kotlin.time.measureTimedValue
 
 const val PROGRESSION_DELAY_MILLIS = 20000L
 const val CONCURRENCY_LIMITATION = 1000
@@ -60,22 +60,21 @@ fun s3Service(s3ClientWrapper: S3ClientWrapper) = object : S3Service {
 
             coroutineScope {
                 val consoleDisplayer = launchConsoleDisplayer(dispatcher, progress)
-                var copy: Either<BucketError, List<Unit>>
-                val duration = measureTime {
-                    with(s3ClientWrapper) {
-//                        copy = copyInvoicesBase(invoices, fromBucket, bucketName, dispatcher, progress)
-                        copy = copyInvoicesWithArrowConcurrency(invoices, fromBucket, bucketName, dispatcher, progress)
-//                        copy = copyInvoicesWithOwnConcurrentMapConcurrency(invoices, fromBucket, bucketName, dispatcher, concurrency - 1, progress)
-//                        copy = copyInvoicesWithChunkAndFlatMapMerge(invoices, fromBucket, bucketName, dispatcher, concurrency - 1, progress)
+
+                measureTimedValue {
+                    s3ClientWrapper.run {
+//                      copyInvoicesBase(invoices, fromBucket, bucketName, dispatcher, progress)
+                        copyInvoicesWithArrowConcurrency(invoices, fromBucket, bucketName, dispatcher, progress)
+//                      copyInvoicesWithOwnConcurrentMapConcurrency(invoices, fromBucket, bucketName, dispatcher, concurrency - 1, progress)
+//                      copyInvoicesWithChunkAndFlatMapMerge(invoices, fromBucket, bucketName, dispatcher, concurrency - 1, progress)
                     }
-                }
-
-                println("Copy duration: $duration")
-                consoleDisplayer.cancel()
-
-//                s3ClientWrapper.execute(s3ClientWrapper.emptyAndDeleteBucketCommand(bucketName)).bind()
-                // FIXME Not satisfying. Returning an either should be cleaner + not need to interrupt the flow here
-                copy.bind() // binding later to have the copy duration
+                }.also {
+                    println("Copy duration: ${it.duration}")
+                    consoleDisplayer.cancel()
+//                    s3ClientWrapper.execute(s3ClientWrapper.emptyAndDeleteBucketCommand(bucketName)).bind()
+                }.value.mapLeft {
+                    CopiesFailures(bucketName).appendAll(it.toList())
+                }.bind()
             }
         }
 }
@@ -88,14 +87,12 @@ context(S3ClientWrapper, CoroutineScope)
     toBucketName: String,
     dispatcher: CoroutineDispatcher,
     progress: MutableStateFlow<Progress>
-): Either<BucketError, List<Unit>> =
+): Either<List<BucketError>, List<Unit>> =
     invoices.map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }.map {
         async(dispatcher) {
             either { executeWithProgress(it, progress).bind() }
         }
-    }.awaitAll().flattenOrAccumulate().mapLeft {
-        CopiesFailures(toBucketName).appendAll(it.toList())
-    }
+    }.awaitAll().flattenOrAccumulate()
 
 
 data class Progress(val current: Int, val failures: Int, val total: Int)
@@ -107,13 +104,11 @@ private suspend fun copyInvoicesWithArrowConcurrency(
     toBucketName: String,
     dispatcher: CoroutineDispatcher,
     progress: MutableStateFlow<Progress>
-): Either<BucketError, List<Unit>> =
+): Either<List<BucketError>, List<Unit>> =
     invoices
         .map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }
         .parMapOrAccumulate(context = dispatcher, concurrency = 1000) { command ->
             executeWithProgress(command, progress).bind()
-        }.mapLeft {
-            CopiesFailures(toBucketName).appendAll(it.toList())
         }
 
 
@@ -138,14 +133,12 @@ private suspend fun copyInvoicesWithOwnConcurrentMapConcurrency(
     dispatcher: CoroutineDispatcher,
     concurrency: Int,
     progress: MutableStateFlow<Progress>,
-): Either<BucketError, List<Unit>> =
+): Either<List<BucketError>, List<Unit>> =
     invoices.asFlow()
         .map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }
         .concurrentMap(dispatcher, concurrency) {
             either { executeWithProgress(it, progress).bind() }
-        }.toList().flattenOrAccumulate().mapLeft {
-            CopiesFailures(toBucketName).appendAll(it.toList())
-        }
+        }.toList().flattenOrAccumulate()
 
 @OptIn(FlowPreview::class)
 private fun <T, R> Flow<T>.concurrentMap(dispatcher: CoroutineDispatcher, concurrencyLevel: Int, transform: suspend (T) -> R): Flow<R> {
@@ -163,7 +156,7 @@ private suspend fun copyInvoicesWithChunkAndFlatMapMerge(
     dispatcher: CoroutineDispatcher,
     concurrency: Int,
     progress: MutableStateFlow<Progress>,
-): Either<BucketError, List<Unit>> =
+): Either<List<BucketError>, List<Unit>> =
     invoices
         .map { invoice -> copyInvoiceDocumentCommand(fromBucket, toBucketName, invoice) }
         .chunked(Integer.max(round(invoices.size / concurrency.toFloat()).toInt(), 1)).asFlow() // batch invoices command
@@ -171,6 +164,4 @@ private suspend fun copyInvoicesWithChunkAndFlatMapMerge(
             copyCommands.asFlow().map { either { executeWithProgress(it, progress).bind() } }
         }
         .flowOn(dispatcher)
-        .toList().flattenOrAccumulate().mapLeft {
-            CopiesFailures(toBucketName).appendAll(it.toList())
-        }
+        .toList().flattenOrAccumulate()

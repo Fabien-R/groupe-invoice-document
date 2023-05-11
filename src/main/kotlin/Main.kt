@@ -65,7 +65,7 @@ private suspend fun copyDepositFiles(
     clientId: String,
     env: String
 ) {
-    val duration = measureTime {
+    measureTime {
         either {
             modules.s3Service.ensureBucketExists(documentBucket).bind()
 
@@ -82,8 +82,7 @@ private suspend fun copyDepositFiles(
             modules.s3Service.copyInvoiceFileToClientBucket(documentBucket, toBucketName, invoices).bind()
 
         }.mapLeft(DomainError::toLog)
-    }
-    println("Total duration: $duration")
+    }.let { println("Total duration: $it") }
 }
 
 fun DomainError.toLog() {
