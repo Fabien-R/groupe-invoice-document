@@ -1,7 +1,7 @@
 [versions]
 arrow = "1.2.0-RC"
 aws-sdk-kotlin = "0.19.5-beta"
-coroutines = "1.7.0"
+coroutines = "1.7.1"
 hikari = "5.0.1"
 hoplite = "2.7.4"
 kotlin = "1.8.21"
