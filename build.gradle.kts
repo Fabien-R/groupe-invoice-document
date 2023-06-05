@@ -41,7 +41,7 @@ sqldelight {
     databases {
         create("Database") {
             packageName.set("com.github.fabien")
-            sourceFolders.set(listOf("sqldelight"))
+            srcDirs.setFrom("src/main/sqldelight")
             dialect(libs.sqldelight.postgresql.get())
             deriveSchemaFromMigrations
         }
