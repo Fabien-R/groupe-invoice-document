@@ -4,7 +4,7 @@ aws-sdk-kotlin = "0.19.5-beta"
 coroutines = "1.7.1"
 hikari = "5.0.1"
 hoplite = "2.7.4"
-kotlin = "1.8.21"
+kotlin = "1.8.22"
 postgresql = "42.6.0"
 sqldelight = "2.0.0-rc01"
 
